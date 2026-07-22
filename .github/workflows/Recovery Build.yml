@@ -44,9 +44,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
+    runs-on: ubuntu-22.04
     steps:
     - name: Display Run Parameters
       run: |
