@@ -125,14 +125,16 @@ jobs:
 
     - name: Clone device tree
       run: |
+        rm -rf ./${{ github.event.inputs.DEVICE_PATH }}
         git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Clone common tree
       if: |
-        github.event.inputs.COMMON_TREE_URL != null
-        && github.event.inputs.COMMON_PATH != null
+        github.event.inputs.COMMON_TREE_URL != ''
+        && github.event.inputs.COMMON_PATH != ''
       run: |
+        rm -rf ./${{ github.event.inputs.COMMON_PATH }}
         git clone ${{ github.event.inputs.COMMON_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.COMMON_PATH }}
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
@@ -146,10 +148,19 @@ jobs:
 
     - name: Sync Device Dependencies
       run: |
-        bash ${GITHUB_WORKSPACE}/scripts/convert.sh ${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies
-        repo sync -j$(nproc --all)
+        deps_file="${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies"
+        if [ -f "$deps_file" ]; then
+          while IFS='|' read -r url branch path; do
+            [ -z "$url" ] && continue
+            echo "Syncing dependency: $path"
+            rm -rf "./$path"
+            git clone --depth=1 "$url" -b "${branch:-${{ github.event.inputs.MANIFEST_BRANCH }}}" "./$path"
+          done < "$deps_file"
+          repo sync -j$(nproc --all)
+        else
+          echo "No .dependencies file found at $deps_file, skipping"
+        fi
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-      continue-on-error: true
 
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
@@ -163,13 +174,21 @@ jobs:
         lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng && make clean && make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
+    - name: Stage artifacts
+      run: |
+        mkdir -p upload
+        out_dir="workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
+        find "$out_dir" -maxdepth 1 -type f \( \
+          -name "${{ github.event.inputs.BUILD_TARGET }}.img" -o \
+          -name "*.zip" -o \
+          -name "*vendor*.img" \
+        \) -exec cp -v {} upload/ \;
+        echo "Staged files:" && ls -lh upload/
+
     - name: Upload to Release
       uses: softprops/action-gh-release@v2
       with:
-        files: | 
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*vendor*.img
+        files: upload/*
         name: ${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
         tag_name: ${{ github.run_id }}
         body: |
